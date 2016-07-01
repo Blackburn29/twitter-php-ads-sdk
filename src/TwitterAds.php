@@ -7,8 +7,8 @@
 namespace Hborras\TwitterAdsSDK;
 
 use Exception;
-use Hborras\TwitterAdsSDK\TwitterAds\Account;
 use Hborras\TwitterAdsSDK;
+use Hborras\TwitterAdsSDK\TwitterAds\Account;
 use Hborras\TwitterAdsSDK\TwitterAds\Cursor;
 use Hborras\TwitterAdsSDK\TwitterAds\Errors\BadRequest;
 use Hborras\TwitterAdsSDK\TwitterAds\Errors\Forbidden;
@@ -18,6 +18,7 @@ use Hborras\TwitterAdsSDK\TwitterAds\Errors\RateLimit;
 use Hborras\TwitterAdsSDK\TwitterAds\Errors\ServerError;
 use Hborras\TwitterAdsSDK\TwitterAds\Errors\ServiceUnavailable;
 use Hborras\TwitterAdsSDK\Util\JsonDecoder;
+use Hborras\TwitterAdsSDK\Ton\TonFile;
 
 /**
  * TwitterAds class for interacting with the Twitter API.
@@ -26,12 +27,15 @@ use Hborras\TwitterAdsSDK\Util\JsonDecoder;
  */
 class TwitterAds extends Config
 {
-    const API_VERSION      = '1';
-    const API_HOST         = 'https://ads-api.twitter.com';
-    const API_HOST_SANDBOX = 'https://ads-api-sandbox.twitter.com';
-    const API_HOST_OAUTH   = 'https://api.twitter.com';
-    const UPLOAD_HOST      = 'https://upload.twitter.com';
-    const UPLOAD_CHUNK     = 40960; // 1024 * 40
+    const API_VERSION               = '1';
+    const TON_API_HOST              = 'https://ton.twitter.com';
+    const TON_API_VERSION           = '1.1';
+    const TON_ADS_BUCKET            = 'ta_partner';
+    const API_HOST                  = 'https://ads-api.twitter.com';
+    const API_HOST_SANDBOX          = 'https://ads-api-sandbox.twitter.com';
+    const API_HOST_OAUTH            = 'https://api.twitter.com';
+    const UPLOAD_HOST               = 'https://upload.twitter.com';
+    const UPLOAD_CHUNK              = 40960; // 1024 * 40
 
     /** @var  string Method used for the request */
     private $method;
@@ -275,6 +279,42 @@ class TwitterAds extends Config
         }
     }
 
+    public function uploadFile(TonFile $file, $bucket=null)
+    {
+        return $this->uploadFileSingleChunk($file, $bucket);
+    }
+    
+    private function uploadFileSingleChunk(TonFile $file, $bucket)
+    {
+        $data = $file->read($file->getSize());
+
+        return $this->oAuthRequest(
+            sprintf('%s/%s/ton/bucket/%s', self::TON_API_HOST, self::TON_API_VERSION, $bucket),
+            'POST',
+            ['aaa@test.com'],
+            [
+                'Content-Type'      => 'text/plain',
+                'Content-Length'    => 12,
+                'X-TON-Expires'     => 'Sat, 05 Sep 2015 23:01:50 GMT'
+            ]
+        ); 
+    }
+
+    private function uploadFileMultiChunk(TonFile $file, $bucket)
+    {
+        return $this->oAuthRequest(
+            sprintf('%s/%s/ton/bucket/%s?resumable=true', self::TON_API_HOST, self::TON_API_VERSION, $bucket),
+            'POST',
+            [
+                'X-TON-Content-Type'   => $file->getContentType(),
+                'X-TON-Content-Length' => $file->getSize(),
+                'X-TON-Expires'        => $file->getExpiration(),
+                'Content-Length'       => 0,
+                'Content-Type'         => $file->getContentType(),
+            ]
+        ); 
+    }
+
     /**
      * Private method to upload media (not chunked) to upload.twitter.com.
      *
@@ -417,7 +457,7 @@ class TwitterAds extends Config
      *
      * @throws TwitterAdsException
      */
-    private function oAuthRequest($url, $method, array $parameters)
+    private function oAuthRequest($url, $method, array $parameters, array $headers=[])
     {
         $request = Request::fromConsumerAndToken($this->consumer, $this->token, $method, $url, $parameters);
         if (array_key_exists('oauth_callback', $parameters)) {
@@ -431,7 +471,27 @@ class TwitterAds extends Config
             $authorization = 'Authorization: Bearer '.$this->bearer;
         }
 
-        return $this->request($request->getNormalizedHttpUrl(), $method, $authorization, $parameters);
+        $headers = [
+            'Content-Type: text/plain',
+            'Content-Length: 12',
+            $authorization
+        ];
+
+        $postfields = ['aaa@test.com'];
+
+        $ch = curl_init();
+        curl_setopt($ch, CURLOPT_VERBOSE, true);
+        curl_setopt($ch, CURLOPT_URL, 'https://ton.twitter.com/1.1/ton/bucket/ta_partner');
+        curl_setopt($ch, CURLOPT_HEADER, true);
+        curl_setopt($ch, CURLOPT_HTTPHEADER, $headers);
+        curl_setopt($ch, CURLOPT_RETURNTRANSFER, true);
+        curl_setopt($ch, CURLOPT_FOLLOWLOCATION, true);
+        curl_setopt($ch, CURLOPT_POST, 1);
+        curl_setopt($ch, CURLOPT_POSTFIELDS, $postfields);
+        curl_setopt($ch, CURLOPT_SSL_VERIFYPEER, 1);
+        $result = curl_exec($ch);
+
+        //return $this->request($request->getNormalizedHttpUrl(), $method, $authorization, $parameters, $headers);
     }
 
     /**
@@ -446,15 +506,15 @@ class TwitterAds extends Config
      *
      * @throws TwitterAdsException
      */
-    private function request($url, $method, $authorization, $postfields)
+    private function request($url, $method, $authorization, $postfields, $headers=[])
     {
         /* Curl settings */
         $options = [
-            // CURLOPT_VERBOSE => true,
+             CURLOPT_VERBOSE => true,
             CURLOPT_CAINFO => __DIR__.DIRECTORY_SEPARATOR.'cacert.pem',
             CURLOPT_CONNECTTIMEOUT => $this->connectionTimeout,
             CURLOPT_HEADER => true,
-            CURLOPT_HTTPHEADER => ['Accept: application/json', $authorization, 'Expect:'],
+            CURLOPT_HTTPHEADER => array_merge(['Accept: application/json', $authorization, 'Expect:'], Util::formatHeaders($headers)),
             CURLOPT_RETURNTRANSFER => true,
             CURLOPT_SSL_VERIFYHOST => 2,
             CURLOPT_SSL_VERIFYPEER => true,
@@ -490,6 +550,7 @@ class TwitterAds extends Config
         if (in_array($method, ['GET', 'PUT', 'DELETE']) && !empty($postfields)) {
             $options[CURLOPT_URL] .= '?'.Util::buildHttpQuery($postfields);
         }
+
 
         $curlHandle = curl_init();
         curl_setopt_array($curlHandle, $options);

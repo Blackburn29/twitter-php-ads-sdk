@@ -131,6 +131,8 @@ class Request
 
         $parts = Util::urlencodeRfc3986($parts);
 
+        var_dump(gettype($this->getSignableParameters()));
+
         return implode('&', $parts);
     }
 

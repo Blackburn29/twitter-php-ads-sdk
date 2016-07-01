@@ -77,6 +77,28 @@ class Util
     }
 
     /**
+     * Curl doesnt allow associative arrays for headers. This is transform headers
+     * from an associative array to their correct format
+     *
+     * @param $headers array
+     *
+     * @return array
+     */
+    public static function formatHeaders(array $headers)
+    {
+        $data = [];
+        foreach ($headers as $key => $value) {
+            if (empty($key)) {
+                $data[] = $value;
+            } else {
+                $data[] = $key.': '.$value;
+            }
+        }
+
+        return $data;
+    }
+
+    /**
      * @param $params
      *
      * @return string
@@ -85,6 +107,12 @@ class Util
     {
         if (!$params) {
             return '';
+        }
+
+        if (isset($params['file_contents'])) {
+            var_dump('sending raw data');
+            var_dump(strlen($params['file_contents']));
+            return $params['file_contents'];
         }
 
         // Urlencode both keys and values
@@ -110,6 +138,7 @@ class Util
                 $pairs[] = $parameter.'='.$value;
             }
         }
+
         // For each parameter, the name is separated from the corresponding value by an '=' character (ASCII code 61)
         // Each name-value pair is separated by an '&' character (ASCII code 38)
         return implode('&', $pairs);
